@@ -80,6 +80,7 @@ class Args:
         "masked_dqn_planes", "masked_dqn_grayscale", "masked_dqn_pixel_planes", "masked_dqn_parallelplanes",
         "masked_dqn_bin+pixels", "masked_dqn_pixels+pixels",
         "masked_dqn_planes+pixels", "masked_dqn_grayscale+pixels", "masked_dqn_pixel_planes+pixels",
+        "masked_dqn_sarfa_saliency",
     ] = "dqn"
     """observation mode for OCAtari"""
     buffer_window_size: int = 4
@@ -98,10 +99,12 @@ class Args:
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "OCCAM"
     """the wandb's project name"""
-    wandb_entity: str = "AIML_OC"
+    wandb_entity: str = None
     """the entity (team) of wandb's project"""
     wandb_dir: str = None
     """the wandb directory"""
+    run_name: str = ""
+    """custom run name (leave empty for auto-generated with timestamp)"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
     ckpt: str = ""
@@ -220,9 +223,10 @@ def _log_model_artifact(run, path, name, iteration=None, metadata=None):
 # -----------------------
 # Env factory with per-worker seeding
 # -----------------------
-def make_env(env_id, idx, capture_video, run_dir, seed=None):
+def make_env(env_id, idx, capture_video, run_dir, seed=None, agent=None):
     """
     Creates a gym environment with the specified settings and seeds it.
+    agent: Optional trained agent for SARFA saliency computation
     """
     def thunk():
         # Per-subprocess RNG seeds (VERY important)
@@ -313,6 +317,14 @@ def make_env(env_id, idx, capture_video, run_dir, seed=None):
             env = ocatari_wrappers.PixelMaskPlanesWrapper(
                 env, buffer_window_size=args.buffer_window_size, include_pixels=args.add_pixels
             )
+        elif args.masked_wrapper == "masked_dqn_sarfa_saliency":
+            env = ocatari_wrappers.SarfaSaliencyWrapper(
+                env,
+                trained_model=agent,  # Can be None for random weights
+                use_blur=False,
+                buffer_window_size=args.buffer_window_size,
+                include_pixels=args.add_pixels
+            )
 
         # Seed env + spaces via Gymnasium API
         try:
@@ -355,7 +367,10 @@ if __name__ == "__main__":
     seed_everything(args.seed, cuda=args.cuda, torch_deterministic=args.torch_deterministic)
 
     # Run name
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    if args.run_name:
+        run_name = args.run_name
+    else:
+        run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
 
     assert args.obs_mode != "obj" or args.architecture == "PPO_OBJ", '"obj" observations only work with "PPO_OBJ" architecture!'
 
@@ -405,7 +420,7 @@ if __name__ == "__main__":
 
     # Vectorized envs with per-worker seeds
     envs = SubprocVecEnv(
-        [make_env(args.env_id, i, args.capture_video, writer_dir, seed=args.seed + i) for i in range(args.num_envs)]
+        [make_env(args.env_id, i, args.capture_video, writer_dir, seed=args.seed + i, agent=None) for i in range(args.num_envs)]
     )
     envs = VecNormalize(envs, norm_obs=False, norm_reward=True)
 
