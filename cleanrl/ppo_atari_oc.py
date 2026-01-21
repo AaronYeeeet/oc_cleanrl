@@ -26,7 +26,7 @@ from stable_baselines3.common.atari_wrappers import (
     FireResetEnv,
     NoopResetEnv,
 )
-from stable_baselines3.common.vec_env import VecNormalize, SubprocVecEnv
+from stable_baselines3.common.vec_env import VecNormalize, SubprocVecEnv, DummyVecEnv
 
 import ocatari_wrappers
 
@@ -341,6 +341,8 @@ def make_env(env_id, idx, capture_video, run_dir, seed=None, agent=None):
     return thunk
 
 
+
+
 # -----------------------
 # Main
 # -----------------------
@@ -419,8 +421,9 @@ if __name__ == "__main__":
     logger.debug(f"Using device {device}.")
 
     # Vectorized envs with per-worker seeds
-    envs = SubprocVecEnv(
-        [make_env(args.env_id, i, args.capture_video, writer_dir, seed=args.seed + i, agent=None) for i in range(args.num_envs)]
+    envs = DummyVecEnv(
+        [make_env(args.env_id, i, args.capture_video, writer_dir, seed=args.seed + i, agent=None) for i in
+         range(args.num_envs)]
     )
     envs = VecNormalize(envs, norm_obs=False, norm_reward=True)
 
@@ -452,12 +455,55 @@ if __name__ == "__main__":
     else:
         raise NotImplementedError(f"Architecture {args.architecture} does not exist!")
 
+    if args.ckpt:
+        print(f"Loading checkpoint from {args.ckpt}")
+        checkpoint = torch.load(args.ckpt, map_location=device)
+        agent.load_state_dict(checkpoint["model_weights"])
+
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     if args.track:
         num_params = sum(p.numel() for p in agent.parameters())
         wandb.summary["params_total"] = num_params
         wandb.watch(agent, log="gradients", log_freq=1000, log_graph=False)
+    # =========================================================================
+    # [NEW CODE START] SMART INJECTION: Handles Agent + Warmup Logic
+    # =========================================================================
+    if args.masked_wrapper == "masked_dqn_sarfa_saliency":
+        print(f"Injecting agent into SARFA wrappers...")
+
+        # Logic: If we loaded a checkpoint, the agent is smart.
+        # We don't need to wait. Start masking immediately.
+        target_warmup = 0 if args.ckpt else 50000
+
+        if args.ckpt:
+            print(f"Checkpoint loaded! Skipping warmup (warmup_steps={target_warmup})")
+        else:
+            print(f"No checkpoint. Using warmup phase (warmup_steps={target_warmup})")
+
+        # Unwrap to find the real environments
+        # envs is VecNormalize(DummyVecEnv(...)) -> we want DummyVecEnv
+        vec_env = envs.venv if hasattr(envs, "venv") else envs
+
+        # Iterate over the actual gym environments inside DummyVecEnv
+        for env_idx, env in enumerate(vec_env.envs):
+            current_wrapper = env
+            found = False
+            # Dig down through the wrapper stack (Monitor -> TimeLimit -> Sarfa...)
+            while hasattr(current_wrapper, "env"):
+                if isinstance(current_wrapper, ocatari_wrappers.SarfaSaliencyWrapper):
+                    # 1. Give it the agent
+                    current_wrapper.set_model(agent)
+                    # 2. Set the warmup dynamically
+                    current_wrapper.warmup_steps = target_warmup
+                    found = True
+                    break
+                current_wrapper = current_wrapper.env
+
+            if not found:
+                print(f"WARNING: SarfaSaliencyWrapper not found in env {env_idx}")
+    # =========================================================================
+    # [NEW CODE END]
 
     # Allocate rollout storage (clear dtypes, on device)
     obs_space_shape = envs.observation_space.shape
