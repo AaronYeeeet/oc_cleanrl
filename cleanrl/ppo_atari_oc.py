@@ -522,6 +522,13 @@ if __name__ == "__main__":
     next_obs = torch.tensor(next_obs, dtype=torch.float32, device=device)
     next_done = torch.zeros(args.num_envs, dtype=torch.float32, device=device)
 
+    # BILD SPEICHERN
+    if args.masked_wrapper == "masked_dqn_sarfa_saliency":
+        game_name = args.env_id.split('/')[-1].replace('-v5', '')
+        sarfa_save_dir = f"runs/sarfa_masks_{game_name}_{run_name}"
+        os.makedirs(sarfa_save_dir, exist_ok=True)
+        print(f"SARFA masks will be saved to: {sarfa_save_dir}")
+
     pbar = tqdm(range(1, args.num_iterations + 1), postfix=postfix)
     for iteration in pbar:
         # LR anneal
@@ -569,6 +576,30 @@ if __name__ == "__main__":
             rewards[step] = torch.tensor(reward_np, dtype=torch.float32, device=device).view(-1)
             next_obs = torch.tensor(next_obs_np, dtype=torch.float32, device=device)
             next_done = torch.tensor(next_done_np, dtype=torch.float32, device=device)
+
+            # BILD SPEICHERN
+            if args.masked_wrapper == "masked_dqn_sarfa_saliency" and step % 100 == 0:
+                # Prüfe die Werte der ersten Umgebung
+                obs_sample = next_obs_np[0]
+                print(f"[Step {global_step}] SARFA Mask - Min: {obs_sample.min():.4f}, Max: {obs_sample.max():.4f}, Mean: {obs_sample.mean():.4f}")
+
+                # Speichere Bild
+                import matplotlib.pyplot as plt
+
+                # Visualisiere ersten Frame des Stacks (angenommen 4x84x84)
+                if len(obs_sample.shape) == 3:  # (channels, height, width)
+                    frame = obs_sample[0]  # Erster Frame
+                else:
+                    frame = obs_sample
+
+                plt.figure(figsize=(6, 6))
+                plt.imshow(frame, cmap='gray', vmin=0, vmax=255)
+                plt.title(f"SARFA Mask - Step {global_step}")
+                plt.colorbar()
+                plt.axis('off')
+                plt.savefig(f"{sarfa_save_dir}/mask_step_{global_step}.png", bbox_inches='tight', dpi=100)
+                plt.close()
+                print(f"  → Bild gespeichert: {sarfa_save_dir}/mask_step_{global_step}.png")
 
             # Per-episode stats
             if bool(next_done.bool().any()):
