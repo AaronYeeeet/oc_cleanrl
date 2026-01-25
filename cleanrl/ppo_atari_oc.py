@@ -578,28 +578,49 @@ if __name__ == "__main__":
             next_done = torch.tensor(next_done_np, dtype=torch.float32, device=device)
 
             # BILD SPEICHERN
-            if args.masked_wrapper == "masked_dqn_sarfa_saliency" and step % 100 == 0:
-                # Prüfe die Werte der ersten Umgebung
+            if args.masked_wrapper == "masked_dqn_sarfa_saliency" and global_step % 2 == 0:
+                # --- 1. MASKIERTES Obs ---
                 obs_sample = next_obs_np[0]
-                print(f"[Step {global_step}] SARFA Mask - Min: {obs_sample.min():.4f}, Max: {obs_sample.max():.4f}, Mean: {obs_sample.mean():.4f}")
+                print(
+                    f"[Step {global_step}] SARFA Mask Stats - Min: {obs_sample.min():.4f}, Max: {obs_sample.max():.4f}, Mean: {obs_sample.mean():.4f}")
 
-                # Speichere Bild
                 import matplotlib.pyplot as plt
 
                 # Visualisiere ersten Frame des Stacks (angenommen 4x84x84)
                 if len(obs_sample.shape) == 3:  # (channels, height, width)
-                    frame = obs_sample[0]  # Erster Frame
+                    frame = obs_sample[0]  # Erster Frame (Graustufen/Maskiert)
                 else:
                     frame = obs_sample
 
                 plt.figure(figsize=(6, 6))
                 plt.imshow(frame, cmap='gray', vmin=0, vmax=255)
-                plt.title(f"SARFA Mask - Step {global_step}")
+                plt.title(f"SARFA Masked Observation - Step {global_step}")
                 plt.colorbar()
                 plt.axis('off')
-                plt.savefig(f"{sarfa_save_dir}/mask_step_{global_step}.png", bbox_inches='tight', dpi=100)
+                mask_path = f"{sarfa_save_dir}/mask_step_{global_step}.png"
+                plt.savefig(mask_path, bbox_inches='tight', dpi=100)
                 plt.close()
-                print(f"  → Bild gespeichert: {sarfa_save_dir}/mask_step_{global_step}.png")
+                print(f"  → Maskierte Obs gespeichert: {mask_path}")
+
+                # --- 2. unmasaked ---
+                try:
+                    # Wir rufen 'render' auf der ersten Umgebung auf, um das originale RGB-Obs zu erhalten
+                    # env_method gibt eine Liste zurück, wir nehmen das erste Element [0]
+                    unmasked_frame = envs.env_method("render")[0]
+
+                    if unmasked_frame is not None:
+                        plt.figure(figsize=(6, 6))
+                        plt.imshow(unmasked_frame)
+                        plt.title(f"Original (Unmasked) - Step {global_step}")
+                        plt.axis('off')
+                        unmask_path = f"{sarfa_save_dir}/unmasked_step_{global_step}.png"
+                        plt.savefig(unmask_path, bbox_inches='tight', dpi=100)
+                        plt.close()
+                        print(f"  → Unmaskiertes Obs gespeichert: {unmask_path}")
+                    else:
+                        print("  ! Warnung: Render hat 'None' zurückgegeben.")
+                except Exception as e:
+                    print(f"  ! Fehler beim Speichern des unmaskierten Obs: {e}")
 
             # Per-episode stats
             if bool(next_done.bool().any()):
