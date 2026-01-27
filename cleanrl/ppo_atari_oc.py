@@ -467,22 +467,13 @@ if __name__ == "__main__":
         wandb.summary["params_total"] = num_params
         wandb.watch(agent, log="gradients", log_freq=1000, log_graph=False)
     # =========================================================================
-    # [NEW CODE START] SMART INJECTION: Handles Agent + Warmup Logic
+    # =========================================================================
+    # SARFA Agent Injection
     # =========================================================================
     if args.masked_wrapper == "masked_dqn_sarfa_saliency":
         print(f"Injecting agent into SARFA wrappers...")
 
-        # Logic: If we loaded a checkpoint, the agent is smart.
-        # We don't need to wait. Start masking immediately.
-        target_warmup = 0 if args.ckpt else 50000
-
-        if args.ckpt:
-            print(f"Checkpoint loaded! Skipping warmup (warmup_steps={target_warmup})")
-        else:
-            print(f"No checkpoint. Using warmup phase (warmup_steps={target_warmup})")
-
         # Unwrap to find the real environments
-        # envs is VecNormalize(DummyVecEnv(...)) -> we want DummyVecEnv
         vec_env = envs.venv if hasattr(envs, "venv") else envs
 
         # Iterate over the actual gym environments inside DummyVecEnv
@@ -492,10 +483,7 @@ if __name__ == "__main__":
             # Dig down through the wrapper stack (Monitor -> TimeLimit -> Sarfa...)
             while hasattr(current_wrapper, "env"):
                 if isinstance(current_wrapper, ocatari_wrappers.SarfaSaliencyWrapper):
-                    # 1. Give it the agent
                     current_wrapper.set_model(agent)
-                    # 2. Set the warmup dynamically
-                    current_wrapper.warmup_steps = target_warmup
                     found = True
                     break
                 current_wrapper = current_wrapper.env
@@ -578,7 +566,7 @@ if __name__ == "__main__":
             next_done = torch.tensor(next_done_np, dtype=torch.float32, device=device)
 
             # BILD SPEICHERN
-            if args.masked_wrapper == "masked_dqn_sarfa_saliency" and global_step % 2 == 0:
+            if args.masked_wrapper == "masked_dqn_sarfa_saliency" and global_step % 100 == 0:
                 # --- 1. MASKIERTES Obs ---
                 obs_sample = next_obs_np[0]
                 print(
