@@ -80,7 +80,7 @@ class Args:
         "masked_dqn_planes", "masked_dqn_grayscale", "masked_dqn_pixel_planes", "masked_dqn_parallelplanes",
         "masked_dqn_bin+pixels", "masked_dqn_pixels+pixels",
         "masked_dqn_planes+pixels", "masked_dqn_grayscale+pixels", "masked_dqn_pixel_planes+pixels",
-        "masked_dqn_sarfa_saliency",
+        "masked_dqn_sarfa_saliency", "masked_dqn_sarfa_dual",
     ] = "dqn"
     """observation mode for OCAtari"""
     buffer_window_size: int = 4
@@ -326,6 +326,13 @@ def make_env(env_id, idx, capture_video, run_dir, seed=None, agent=None):
                 buffer_window_size=args.buffer_window_size,
                 include_pixels=args.add_pixels
             )
+        elif args.masked_wrapper == "masked_dqn_sarfa_dual":
+            env = ocatari_wrappers.SarfaDualWrapper(
+                env,
+                trained_model=agent,  # Can be None for random weights
+                use_blur=False,
+                buffer_window_size=args.buffer_window_size,
+            )
 
         # Seed env + spaces via Gymnasium API
         try:
@@ -471,7 +478,7 @@ if __name__ == "__main__":
     # =========================================================================
     # SARFA Agent Injection
     # =========================================================================
-    if args.masked_wrapper == "masked_dqn_sarfa_saliency":
+    if args.masked_wrapper in ["masked_dqn_sarfa_saliency", "masked_dqn_sarfa_dual"]:
         print(f"Injecting agent into SARFA wrappers...")
 
         # Unwrap to find the real environments
@@ -483,14 +490,15 @@ if __name__ == "__main__":
             found = False
             # Dig down through the wrapper stack (Monitor -> TimeLimit -> Sarfa...)
             while hasattr(current_wrapper, "env"):
-                if isinstance(current_wrapper, ocatari_wrappers.SarfaSaliencyWrapper):
+                if isinstance(current_wrapper,
+                              (ocatari_wrappers.SarfaSaliencyWrapper, ocatari_wrappers.SarfaDualWrapper)):
                     current_wrapper.set_model(agent)
                     found = True
                     break
                 current_wrapper = current_wrapper.env
 
             if not found:
-                print(f"WARNING: SarfaSaliencyWrapper not found in env {env_idx}")
+                print(f"WARNING: SARFA wrapper not found in env {env_idx}")
     # =========================================================================
     # [NEW CODE END]
 
