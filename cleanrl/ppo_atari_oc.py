@@ -525,17 +525,16 @@ if __name__ == "__main__":
         # Use wandb run name when available (fallback to previous timestamped name)
         if args.track and 'run' in globals():
             try:
-                run_name = getattr(run, "name", None) or getattr(run, "id", None)
+                run_name_val = getattr(run, "name", None) or getattr(run, "id", None)
             except Exception:
-                run_name = None
-            if run_name:
-                # sanitize run name for filesystem
-                safe_run_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(run_name))
-                obs_save_dir = f"runs/obs_debug_{args.masked_wrapper}_{safe_run_name}"
+                run_name_val = None
+            if run_name_val:
+                safe_run_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(run_name_val))
             else:
-                obs_save_dir = f"runs/obs_debug_{args.masked_wrapper}_{game_name}_{int(time.time())}"
+                safe_run_name = f"{args.exp_name}_{int(time.time())}"
         else:
-            obs_save_dir = f"runs/obs_debug_{args.masked_wrapper}_{game_name}_{int(time.time())}"
+            safe_run_name = f"{args.exp_name}_{int(time.time())}"
+        obs_save_dir = f"runs/{game_name}/{safe_run_name}"
         os.makedirs(obs_save_dir, exist_ok=True)
         print(f"Observation debug images will be saved to: {obs_save_dir}")
     else:
