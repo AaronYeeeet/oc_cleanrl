@@ -97,7 +97,8 @@ class Args:
     # Tracking
     track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "OCCAM"
+    wandb_project_name: str = "PacMan-10M"
+    # wandb_project_name: str = "Sarfa-Binary"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -510,12 +511,27 @@ if __name__ == "__main__":
     next_obs = torch.tensor(next_obs, dtype=torch.float32, device=device)
     next_done = torch.zeros(args.num_envs, dtype=torch.float32, device=device)
 
-    # BILD SPEICHERN
-    if args.masked_wrapper == "masked_dqn_sarfa_saliency":
+    # BILD SPEICHERN - für alle masked_wrapper
+    if args.masked_wrapper is not None:
         game_name = args.env_id.split('/')[-1].replace('-v5', '')
-        sarfa_save_dir = f"runs/sarfa_masks_{game_name}_{run_name}"
-        os.makedirs(sarfa_save_dir, exist_ok=True)
-        print(f"SARFA masks will be saved to: {sarfa_save_dir}")
+        # Use wandb run name when available (fallback to previous timestamped name)
+        if args.track and 'run' in globals():
+            try:
+                run_name = getattr(run, "name", None) or getattr(run, "id", None)
+            except Exception:
+                run_name = None
+            if run_name:
+                # sanitize run name for filesystem
+                safe_run_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(run_name))
+                obs_save_dir = f"runs/obs_debug_{args.masked_wrapper}_{safe_run_name}"
+            else:
+                obs_save_dir = f"runs/obs_debug_{args.masked_wrapper}_{game_name}_{int(time.time())}"
+        else:
+            obs_save_dir = f"runs/obs_debug_{args.masked_wrapper}_{game_name}_{int(time.time())}"
+        os.makedirs(obs_save_dir, exist_ok=True)
+        print(f"Observation debug images will be saved to: {obs_save_dir}")
+    else:
+        obs_save_dir = None
 
     pbar = tqdm(range(1, args.num_iterations + 1), postfix=postfix)
     for iteration in pbar:
@@ -565,35 +581,39 @@ if __name__ == "__main__":
             next_obs = torch.tensor(next_obs_np, dtype=torch.float32, device=device)
             next_done = torch.tensor(next_done_np, dtype=torch.float32, device=device)
 
-            # BILD SPEICHERN
-            if args.masked_wrapper == "masked_dqn_sarfa_saliency" and global_step % 100 == 0:
+            # BILD SPEICHERN - alle 1M steps für alle masked wrapper
+            if obs_save_dir is not None and global_step % 500_000 == 0:
                 # --- 1. MASKIERTES Obs ---
                 obs_sample = next_obs_np[0]
                 print(
-                    f"[Step {global_step}] SARFA Mask Stats - Min: {obs_sample.min():.4f}, Max: {obs_sample.max():.4f}, Mean: {obs_sample.mean():.4f}")
+                    f"[Step {global_step}] Obs Stats - Shape: {obs_sample.shape}, Min: {obs_sample.min():.4f}, Max: {obs_sample.max():.4f}, Mean: {obs_sample.mean():.4f}")
 
                 import matplotlib.pyplot as plt
 
-                # Visualisiere ersten Frame des Stacks (angenommen 4x84x84)
+                # Visualisiere alle Channels des Stacks
                 if len(obs_sample.shape) == 3:  # (channels, height, width)
-                    frame = obs_sample[0]  # Erster Frame (Graustufen/Maskiert)
+                    num_channels = obs_sample.shape[0]
+                    fig, axes = plt.subplots(1, num_channels, figsize=(3 * num_channels, 3))
+                    if num_channels == 1:
+                        axes = [axes]
+                    for ch_idx, ax in enumerate(axes):
+                        ax.imshow(obs_sample[ch_idx], cmap='gray', vmin=0, vmax=255)
+                        ax.set_title(f"Ch {ch_idx}")
+                        ax.axis('off')
+                    plt.suptitle(f"Masked Obs - Step {global_step} - {args.masked_wrapper}")
                 else:
-                    frame = obs_sample
+                    fig, ax = plt.subplots(figsize=(6, 6))
+                    ax.imshow(obs_sample, cmap='gray', vmin=0, vmax=255)
+                    ax.set_title(f"Masked Obs - Step {global_step}")
+                    ax.axis('off')
 
-                plt.figure(figsize=(6, 6))
-                plt.imshow(frame, cmap='gray', vmin=0, vmax=255)
-                plt.title(f"SARFA Masked Observation - Step {global_step}")
-                plt.colorbar()
-                plt.axis('off')
-                mask_path = f"{sarfa_save_dir}/mask_step_{global_step}.png"
+                mask_path = f"{obs_save_dir}/masked_step_{global_step}.png"
                 plt.savefig(mask_path, bbox_inches='tight', dpi=100)
                 plt.close()
                 print(f"  → Maskierte Obs gespeichert: {mask_path}")
 
-                # --- 2. unmasaked ---
+                # --- 2. unmasked ---
                 try:
-                    # Wir rufen 'render' auf der ersten Umgebung auf, um das originale RGB-Obs zu erhalten
-                    # env_method gibt eine Liste zurück, wir nehmen das erste Element [0]
                     unmasked_frame = envs.env_method("render")[0]
 
                     if unmasked_frame is not None:
@@ -601,7 +621,7 @@ if __name__ == "__main__":
                         plt.imshow(unmasked_frame)
                         plt.title(f"Original (Unmasked) - Step {global_step}")
                         plt.axis('off')
-                        unmask_path = f"{sarfa_save_dir}/unmasked_step_{global_step}.png"
+                        unmask_path = f"{obs_save_dir}/unmasked_step_{global_step}.png"
                         plt.savefig(unmask_path, bbox_inches='tight', dpi=100)
                         plt.close()
                         print(f"  → Unmaskiertes Obs gespeichert: {unmask_path}")
