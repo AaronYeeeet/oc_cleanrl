@@ -86,6 +86,14 @@ def _extract_game_name(env_id: str) -> str:
     return _sanitize_path_component(base)
 
 
+def _extract_modifs_name(modifs: str) -> str:
+    # Keep ordering so folder names stay consistent with CLI input.
+    parts = [p for p in modifs.split(" ") if p.strip()]
+    if not parts:
+        return "none"
+    return _sanitize_path_component("__".join(parts))
+
+
 def _pick_device(device_arg: str) -> torch.device:
     if device_arg == "cpu":
         return torch.device("cpu")
@@ -368,7 +376,17 @@ def evaluate(eval_args: EvalArgs) -> dict[str, Any]:
     output_json = eval_args.output_json.strip()
     if not output_json:
         game_name = _extract_game_name(cfg.env_id)
-        output_json = str(Path("evaluation") / game_name / f"{Path(checkpoint_path).stem}.eval.json")
+        if str(getattr(cfg, "modifs", "")).strip():
+            modifs_name = _extract_modifs_name(str(cfg.modifs))
+            output_json = str(
+                Path("evaluation")
+                / "modifications"
+                / game_name
+                / modifs_name
+                / f"{Path(checkpoint_path).stem}.eval.json"
+            )
+        else:
+            output_json = str(Path("evaluation") / game_name / f"{Path(checkpoint_path).stem}.eval.json")
     Path(output_json).parent.mkdir(parents=True, exist_ok=True)
     with open(output_json, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
