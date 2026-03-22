@@ -85,7 +85,7 @@ class Args:
     """observation mode for OCAtari"""
     buffer_window_size: int = 4
     """length of history in the observations"""
-    backend: Literal["OCAtari", "HackAtari", "Gym"] = "OCAtari"
+    backend: Literal["OCAtari", "HackAtari", "Gym"] = "HackAtari"
     """Which Backend should we use"""
     modifs: str = ""
     """Modifications for HackAtari"""
@@ -224,7 +224,7 @@ def _log_model_artifact(run, path, name, iteration=None, metadata=None):
 # -----------------------
 # Env factory with per-worker seeding
 # -----------------------
-def make_env(env_id, idx, capture_video, run_dir, seed=None, agent=None):
+def make_env(env_id, idx, capture_video, run_dir, seed=None, agent=None, evaluating=False):
     """
     Creates a gym environment with the specified settings and seeds it.
     agent: Optional trained agent for SARFA saliency computation
@@ -278,7 +278,8 @@ def make_env(env_id, idx, capture_video, run_dir, seed=None, agent=None):
         # Standard Atari wrappers
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = NoopResetEnv(env, noop_max=30)
-        env = EpisodicLifeEnv(env)
+        if not evaluating:
+            env = EpisodicLifeEnv(env)
         if "FIRE" in env.unwrapped.get_action_meanings():
             env = FireResetEnv(env)
 
