@@ -1,4 +1,5 @@
 import json
+import importlib
 import os
 import sys
 import time
@@ -9,7 +10,6 @@ from typing import Any, cast
 import numpy as np
 import torch
 import tyro
-import matplotlib.pyplot as plt
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 
@@ -41,7 +41,7 @@ class EvalArgs:
     """Number of evaluation episodes."""
     output_json: str = ""
     """Output JSON path. Empty -> auto under evaluation/<game>/..."""
-    seed: int = 42
+    seed: int = 0 #42
     """Evaluation seed (per env i uses seed+i)."""
     device: str = "auto"
     """auto, cpu, or cuda."""
@@ -51,6 +51,7 @@ class EvalArgs:
     backend: str = ""
     obs_mode: str = ""
     architecture: str = ""
+    sarfa_five_mode: str = ""
     frameskip: int | None = None
     buffer_window_size: int | None = None
     modifs: str = ""
@@ -94,6 +95,52 @@ def _extract_modifs_name(modifs: str) -> str:
     return _sanitize_path_component("__".join(parts))
 
 
+def _parse_modifs(modifs_raw: str) -> list[str]:
+    return [m for m in str(modifs_raw).split(" ") if m]
+
+
+def _available_hackatari_modifs(env_id: str) -> set[str]:
+    game_name = _extract_game_name(env_id)
+    try:
+        modif_module = importlib.import_module(f"hackatari.games.{game_name.lower()}")
+    except ModuleNotFoundError as exc:
+        raise ValueError(
+            f"Could not resolve HackAtari game module for env_id '{env_id}' "
+            f"(expected hackatari.games.{game_name.lower()})."
+        ) from exc
+
+    game_mods = getattr(modif_module, "GameModifications", None)
+    if game_mods is None:
+        return set()
+
+    return {
+        name
+        for name, value in vars(game_mods).items()
+        if callable(value) and not name.startswith("_")
+    }
+
+
+def _validate_eval_modifs(cfg: train_mod.Args) -> None:
+    requested_modifs = _parse_modifs(getattr(cfg, "modifs", ""))
+    if not requested_modifs:
+        return
+
+    if cfg.backend != "HackAtari":
+        raise ValueError(
+            f"--modifs was provided ({requested_modifs}) but backend is '{cfg.backend}'. "
+            "Modifications are only supported with backend='HackAtari'."
+        )
+
+    available = _available_hackatari_modifs(cfg.env_id)
+    unknown = sorted(set(requested_modifs) - available)
+    if unknown:
+        available_list = ", ".join(sorted(available)) if available else "<none>"
+        raise ValueError(
+            f"Unknown HackAtari modification(s) for env_id '{cfg.env_id}': {', '.join(unknown)}. "
+            f"Available modifications: {available_list}"
+        )
+
+
 def _pick_device(device_arg: str) -> torch.device:
     if device_arg == "cpu":
         return torch.device("cpu")
@@ -116,6 +163,28 @@ def _load_checkpoint(path: str, device: torch.device) -> tuple[dict[str, torch.T
     )
 
 
+def _infer_input_channels_from_state_dict(state_dict: dict[str, torch.Tensor]) -> int | None:
+    conv0 = state_dict.get("network.0.weight")
+    if conv0 is None or getattr(conv0, "ndim", 0) != 4:
+        return None
+    return int(conv0.shape[1])
+
+
+def _canonicalize_masked_wrapper(masked_wrapper: Any, state_dict: dict[str, torch.Tensor] | None = None) -> Any:
+    if not isinstance(masked_wrapper, str) or not masked_wrapper.strip():
+        return masked_wrapper
+
+    key = masked_wrapper.strip()
+    # Backward-compatibility: older checkpoints used a generic SARFA dual key.
+    if key == "masked_dqn_sarfa_dual":
+        in_channels = _infer_input_channels_from_state_dict(state_dict or {})
+        if in_channels == 8:
+            return "masked_dqn_sarfa_dual_eight"
+        return "masked_dqn_sarfa_dual_five"
+
+    return key
+
+
 def _merge_args(eval_args: EvalArgs, ckpt_args: dict[str, Any]) -> train_mod.Args:
     cfg = train_mod.Args()
 
@@ -131,6 +200,8 @@ def _merge_args(eval_args: EvalArgs, ckpt_args: dict[str, Any]) -> train_mod.Arg
         cfg.obs_mode = cast(Any, eval_args.obs_mode)
     if eval_args.architecture:
         cfg.architecture = eval_args.architecture
+    if eval_args.sarfa_five_mode:
+        cfg.sarfa_five_mode = cast(Any, eval_args.sarfa_five_mode)
     if eval_args.frameskip is not None:
         cfg.frameskip = eval_args.frameskip
     if eval_args.buffer_window_size is not None:
@@ -160,7 +231,17 @@ def _merge_args(eval_args: EvalArgs, ckpt_args: dict[str, Any]) -> train_mod.Arg
                 cfg.add_pixels = False
         cfg.obs_mode = cast(Any, "ori")
 
+
     return cfg
+
+
+def _infer_sarfa_five_mode_from_checkpoint_name(checkpoint_path: str) -> str | None:
+    name = Path(checkpoint_path).stem.lower()
+    if "x4" in name:
+        return "X4"
+    if "all" in name:
+        return "All"
+    return None
 
 
 def _build_agent(cfg: train_mod.Args, envs: DummyVecEnv, device: torch.device) -> torch.nn.Module:
@@ -254,33 +335,6 @@ def _assert_expected_mask_wrapper(cfg: train_mod.Args, envs: DummyVecEnv) -> Non
             )
 
 
-def _save_debug_observation_image(obs: np.ndarray, checkpoint_path: str) -> str:
-    debug_path = str(Path(checkpoint_path).with_suffix(".debug_obs.png"))
-
-    sample = np.asarray(obs[0])
-    # Common vectorized Atari shapes: (C,H,W) or (H,W,C)
-    if sample.ndim == 3 and sample.shape[0] <= 8:
-        image = sample[0]
-        cmap = "gray"
-    elif sample.ndim == 3:
-        image = sample
-        cmap = None
-    else:
-        image = sample
-        cmap = "gray"
-
-    plt.figure(figsize=(4, 4))
-    if cmap is None:
-        plt.imshow(image)
-    else:
-        plt.imshow(image, cmap=cmap)
-    plt.axis("off")
-    plt.tight_layout(pad=0)
-    plt.savefig(debug_path, bbox_inches="tight", pad_inches=0, dpi=120)
-    plt.close()
-    return debug_path
-
-
 def evaluate(eval_args: EvalArgs) -> dict[str, Any]:
     checkpoint_path = _resolve_checkpoint_path(eval_args.checkpoint)
     if not os.path.exists(checkpoint_path):
@@ -290,6 +344,19 @@ def evaluate(eval_args: EvalArgs) -> dict[str, Any]:
     state_dict, ckpt_args = _load_checkpoint(checkpoint_path, device)
 
     cfg = _merge_args(eval_args, ckpt_args)
+
+    # detect X4 and All from checkpoint name
+    if (
+        getattr(cfg, "masked_wrapper", None) == "masked_dqn_sarfa_dual_five"
+        and not eval_args.sarfa_five_mode
+        and "sarfa_five_mode" not in ckpt_args
+    ):
+        inferred_mode = _infer_sarfa_five_mode_from_checkpoint_name(checkpoint_path)
+        if inferred_mode is not None:
+            cfg.sarfa_five_mode = cast(Any, inferred_mode)
+
+    cfg.masked_wrapper = cast(Any, _canonicalize_masked_wrapper(getattr(cfg, "masked_wrapper", None), state_dict))
+    _validate_eval_modifs(cfg)
     train_mod.args = cfg
     train_mod.seed_everything(cfg.seed, cuda=(device.type == "cuda"), torch_deterministic=cfg.torch_deterministic)
 
@@ -318,7 +385,6 @@ def evaluate(eval_args: EvalArgs) -> dict[str, Any]:
     _inject_agent_into_sarfa_wrappers(cfg, envs, agent)
 
     obs = envs.reset()
-    debug_image_path = _save_debug_observation_image(obs, checkpoint_path)
 
     returns = np.zeros(cfg.num_envs, dtype=np.float64)
     lengths = np.zeros(cfg.num_envs, dtype=np.int64)
@@ -358,6 +424,7 @@ def evaluate(eval_args: EvalArgs) -> dict[str, Any]:
             "backend": cfg.backend,
             "obs_mode": cfg.obs_mode,
             "masked_wrapper": cfg.masked_wrapper,
+            "sarfa_five_mode": getattr(cfg, "sarfa_five_mode", "X4"),
             "architecture": cfg.architecture,
             "num_envs": cfg.num_envs,
         },
@@ -369,7 +436,6 @@ def evaluate(eval_args: EvalArgs) -> dict[str, Any]:
         "return_max": float(np.max(episodic_returns)),
         "length_mean": float(np.mean(episodic_lengths)),
         "seed": cfg.seed,
-        "debug_observation_image": debug_image_path,
         "eval_args": asdict(eval_args),
     }
 

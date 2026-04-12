@@ -32,6 +32,11 @@ import ocatari_wrappers
 
 from typing import Literal
 
+# Ensure project root is importable (e.g. when running `python cleanrl/ppo_atari_oc.py`).
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 # -----------------------
 # Warnings & determinism
 # -----------------------
@@ -154,16 +159,6 @@ class Args:
     target_kl: float = None
     """the target KL divergence threshold"""
 
-    # Transformer parameters
-    emb_dim: int = 128
-    """input embedding size of the transformer"""
-    num_heads: int = 64
-    """number of multi-attention heads"""
-    num_blocks: int = 1
-    """number of transformer blocks"""
-    patch_size: int = 12
-    """ViT patch size"""
-
     # PPObj network parameters
     encoder_dims: tuple[int, ...] = (256, 512, 1024, 512)
     """layer dimensions before nn.Flatten()"""
@@ -173,6 +168,9 @@ class Args:
     # HackAtari testing
     test_modifs: str = ""
     """modifications for HackAtari"""
+
+    sarfa_five_mode: Literal["X4", "All"] = "X4"
+    """for masked_dqn_sarfa_dual_five: X4 -> compute_every_step=False, All -> True"""
 
     # Imperfect detection
     detection_failure_probability: float = 0.0
@@ -329,12 +327,13 @@ def make_env(env_id, idx, capture_video, run_dir, seed=None, agent=None, evaluat
             )
 
         elif args.masked_wrapper == "masked_dqn_sarfa_dual_five":
+            compute_every_step = str(getattr(args, "sarfa_five_mode", "X4")).lower() == "all"
             env = ocatari_wrappers.SarfaDualWrapperFive(
                 env,
                 trained_model=agent,  # can be None
                 buffer_window_size=args.buffer_window_size,
                 include_pixels=args.add_pixels,
-                compute_every_step=True
+                compute_every_step=compute_every_step
             )
 
         elif args.masked_wrapper == "masked_dqn_sarfa_dual_eight":
@@ -367,6 +366,28 @@ def make_env(env_id, idx, capture_video, run_dir, seed=None, agent=None, evaluat
 # Main
 # -----------------------
 if __name__ == "__main__":
+    # Backward-compatibility guard for removed transformer architectures/flags.
+    legacy_arches = {"OCT", "VIT", "VIT2", "MobileVit", "MobileVit2"}
+    removed_flags = {"--emb-dim", "--num-heads", "--num-blocks", "--patch-size"}
+    argv = sys.argv[1:]
+    if "--architecture" in argv:
+        try:
+            legacy_arch = argv[argv.index("--architecture") + 1]
+        except IndexError:
+            legacy_arch = None
+        if legacy_arch in legacy_arches:
+            raise ValueError(
+                f"Architecture '{legacy_arch}' is no longer supported in ppo_atari_oc.py. "
+                "Use --architecture PPO or --architecture PPO_OBJ."
+            )
+    used_removed_flags = [flag for flag in removed_flags if flag in argv]
+    if used_removed_flags:
+        raise ValueError(
+            "Transformer CLI flags were removed from ppo_atari_oc.py: "
+            f"{', '.join(sorted(used_removed_flags))}. "
+            "Use --architecture PPO or --architecture PPO_OBJ."
+        )
+
     # Parse args & seed everything globally
     args = tyro.cli(Args)
 
@@ -448,29 +469,17 @@ if __name__ == "__main__":
     envs = VecNormalize(envs, norm_obs=False, norm_reward=True)
 
     # Agent
-    if args.architecture == "OCT":
-        from architectures.transformer import OCTransformer as Agent
-        agent = Agent(envs, args.emb_dim, args.num_heads, args.num_blocks, device).to(device)
-    elif args.architecture == "VIT":
-        from architectures.transformer import VIT as Agent
-        agent = Agent(envs, args.emb_dim, args.num_heads, args.num_blocks,
-                      args.patch_size, args.buffer_window_size, device).to(device)
-    elif args.architecture == "VIT2":
-        from architectures.transformer import SimpleViT2 as Agent
-        agent = Agent(envs, args.emb_dim, args.num_heads, args.num_blocks,
-                      args.patch_size, args.buffer_window_size, device).to(device)
-    elif args.architecture == "MobileVit":
-        from architectures.transformer import MobileVIT as Agent
-        agent = Agent(envs, args.emb_dim, device).to(device)
-    elif args.architecture == "MobileVit2":
-        from architectures.transformer import MobileViT2 as Agent
-        agent = Agent(envs, args.emb_dim, args.num_heads, args.num_blocks,
-                      args.patch_size, args.buffer_window_size, device).to(device)
-    elif args.architecture == "PPO":
-        from architectures.ppo import PPODefault as Agent
+    if args.architecture == "PPO":
+        try:
+            from cleanrl.architectures.ppo import PPODefault as Agent
+        except ModuleNotFoundError:
+            from architectures.ppo import PPODefault as Agent
         agent = Agent(envs, device).to(device)
     elif args.architecture == "PPO_OBJ":
-        from architectures.ppo import PPObj as Agent
+        try:
+            from cleanrl.architectures.ppo import PPObj as Agent
+        except ModuleNotFoundError:
+            from architectures.ppo import PPObj as Agent
         agent = Agent(envs, device, args.encoder_dims, args.decoder_dims).to(device)
     else:
         raise NotImplementedError(f"Architecture {args.architecture} does not exist!")
