@@ -51,7 +51,7 @@ class EvalArgs:
     backend: str = ""
     obs_mode: str = ""
     architecture: str = ""
-    sarfa_five_mode: str = ""
+    sarfa_five_compute_every_step: bool | None = None
     frameskip: int | None = None
     buffer_window_size: int | None = None
     modifs: str = ""
@@ -200,8 +200,8 @@ def _merge_args(eval_args: EvalArgs, ckpt_args: dict[str, Any]) -> train_mod.Arg
         cfg.obs_mode = cast(Any, eval_args.obs_mode)
     if eval_args.architecture:
         cfg.architecture = eval_args.architecture
-    if eval_args.sarfa_five_mode:
-        cfg.sarfa_five_mode = cast(Any, eval_args.sarfa_five_mode)
+    if eval_args.sarfa_five_compute_every_step is not None:
+        cfg.sarfa_five_compute_every_step = eval_args.sarfa_five_compute_every_step
     if eval_args.frameskip is not None:
         cfg.frameskip = eval_args.frameskip
     if eval_args.buffer_window_size is not None:
@@ -235,12 +235,12 @@ def _merge_args(eval_args: EvalArgs, ckpt_args: dict[str, Any]) -> train_mod.Arg
     return cfg
 
 
-def _infer_sarfa_five_mode_from_checkpoint_name(checkpoint_path: str) -> str | None:
+def _infer_sarfa_five_compute_every_step_from_checkpoint_name(checkpoint_path: str) -> bool | None:
     name = Path(checkpoint_path).stem.lower()
     if "x4" in name:
-        return "X4"
+        return False
     if "all" in name:
-        return "All"
+        return True
     return None
 
 
@@ -345,15 +345,15 @@ def evaluate(eval_args: EvalArgs) -> dict[str, Any]:
 
     cfg = _merge_args(eval_args, ckpt_args)
 
-    # detect X4 and All from checkpoint name
+    # Legacy compatibility for older checkpoints: infer compute_every_step from filename.
     if (
         getattr(cfg, "masked_wrapper", None) == "masked_dqn_sarfa_dual_five"
-        and not eval_args.sarfa_five_mode
-        and "sarfa_five_mode" not in ckpt_args
+        and eval_args.sarfa_five_compute_every_step is None
+        and "sarfa_five_compute_every_step" not in ckpt_args
     ):
-        inferred_mode = _infer_sarfa_five_mode_from_checkpoint_name(checkpoint_path)
-        if inferred_mode is not None:
-            cfg.sarfa_five_mode = cast(Any, inferred_mode)
+        inferred_compute = _infer_sarfa_five_compute_every_step_from_checkpoint_name(checkpoint_path)
+        if inferred_compute is not None:
+            cfg.sarfa_five_compute_every_step = inferred_compute
 
     cfg.masked_wrapper = cast(Any, _canonicalize_masked_wrapper(getattr(cfg, "masked_wrapper", None), state_dict))
     _validate_eval_modifs(cfg)
@@ -424,7 +424,7 @@ def evaluate(eval_args: EvalArgs) -> dict[str, Any]:
             "backend": cfg.backend,
             "obs_mode": cfg.obs_mode,
             "masked_wrapper": cfg.masked_wrapper,
-            "sarfa_five_mode": getattr(cfg, "sarfa_five_mode", "X4"),
+            "sarfa_five_compute_every_step": bool(getattr(cfg, "sarfa_five_compute_every_step", False)),
             "architecture": cfg.architecture,
             "num_envs": cfg.num_envs,
         },

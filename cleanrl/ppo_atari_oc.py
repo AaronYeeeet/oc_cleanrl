@@ -169,8 +169,8 @@ class Args:
     test_modifs: str = ""
     """modifications for HackAtari"""
 
-    sarfa_five_mode: Literal["X4", "All"] = "X4"
-    """for masked_dqn_sarfa_dual_five: X4 -> compute_every_step=False, All -> True"""
+    sarfa_five_compute_every_step: bool = False
+    """for masked_dqn_sarfa_dual_five: whether SARFA is computed at every step"""
 
     # Imperfect detection
     detection_failure_probability: float = 0.0
@@ -327,7 +327,7 @@ def make_env(env_id, idx, capture_video, run_dir, seed=None, agent=None, evaluat
             )
 
         elif args.masked_wrapper == "masked_dqn_sarfa_dual_five":
-            compute_every_step = str(getattr(args, "sarfa_five_mode", "X4")).lower() == "all"
+            compute_every_step = bool(getattr(args, "sarfa_five_compute_every_step", False))
             env = ocatari_wrappers.SarfaDualWrapperFive(
                 env,
                 trained_model=agent,  # can be None
